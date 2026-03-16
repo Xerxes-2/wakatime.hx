@@ -1,0 +1,35 @@
+# helix-steel-wakatime
+
+`helix-steel-wakatime` is a Helix Steel plugin that sends WakaTime heartbeats for:
+
+- document open
+- document save
+- document focus loss
+- document changes after a short idle delay
+
+## Requirements
+
+- Helix built with the Steel event system
+- `wakatime-cli` available on `PATH`
+
+## Installation
+
+Install the package with Forge:
+
+```sh
+forge pkg install --git https://github.com/Xerxes-2/helix-steel-wakatime.git
+```
+
+Then load it from your Helix `init.scm`:
+
+```scheme
+(require "wakatime/wakatime.scm")
+```
+
+The plugin installs itself when required.
+
+## Notes
+
+- The plugin reports itself as `helix-steel-wakatime/0.1.0`.
+- Idle heartbeats are debounced by 2000 ms.
+- Untitled buffers are ignored because WakaTime only receives file-backed entities.
