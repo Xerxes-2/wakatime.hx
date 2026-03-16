@@ -9,8 +9,8 @@
 
 ## Requirements
 
-- Helix built with the Steel event system
-- `wakatime-cli` available on `PATH`
+- Helix built with the Steel event system. See [`STEEL.md`](https://github.com/mattwparas/helix/blob/steel-event-system/STEEL.md).
+- `wakatime-cli` available on `PATH` and configured with your API key
 
 ## Installation
 
