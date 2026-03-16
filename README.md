@@ -1,6 +1,6 @@
-# helix-steel-wakatime
+# wakatime.hx
 
-`helix-steel-wakatime` is a Helix Steel plugin that sends WakaTime heartbeats for:
+`wakatime.hx` is a Helix Steel plugin that sends WakaTime heartbeats for:
 
 - document open
 - document save
@@ -17,7 +17,7 @@
 Install the package with Forge:
 
 ```sh
-forge pkg install --git https://github.com/Xerxes-2/helix-steel-wakatime.git
+forge pkg install --git https://github.com/Xerxes-2/wakatime.hx.git
 ```
 
 Then load it from your Helix `init.scm`:
@@ -30,6 +30,6 @@ The plugin installs itself when required.
 
 ## Notes
 
-- The plugin reports itself as `helix-steel-wakatime/0.1.0`.
+- The plugin reports itself as `wakatime.hx/0.1.0`.
 - Idle heartbeats are debounced by 2000 ms.
 - Untitled buffers are ignored because WakaTime only receives file-backed entities.

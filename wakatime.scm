@@ -12,7 +12,7 @@
 (define *wakatime-cli* "wakatime-cli")
 (define *wakatime-editor-name* "helix")
 (define *wakatime-editor-version* #f)
-(define *wakatime-plugin-name* "helix-steel-wakatime")
+(define *wakatime-plugin-name* "wakatime.hx")
 (define *wakatime-plugin-version* "0.1.0")
 (define *wakatime-idle-delay-ms* 2000)
 
