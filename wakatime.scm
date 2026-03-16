@@ -32,16 +32,22 @@
   (if *wakatime-editor-version*
       *wakatime-editor-version*
       (begin
-        (let ([spawned (spawn-process
-                         (with-stdout-piped (command "hx" (list "--version"))))])
-          (if (Ok? spawned)
-              (let ([output (wait->stdout (Ok->value spawned))])
-                (if (Ok? output)
-                    (let ([version (extract-version (Ok->value output))])
-                      (set! *wakatime-editor-version* version)
-                      version)
-                    "unknown"))
-              "unknown")))))
+        (let ([commands '("hx" "helix")])
+          (let loop ([remaining commands])
+            (if (null? remaining)
+                "unknown"
+                (let ([spawned
+                       (spawn-process
+                         (with-stdout-piped
+                           (command (car remaining) (list "--version"))))])
+                  (if (Ok? spawned)
+                      (let ([output (wait->stdout (Ok->value spawned))])
+                        (if (Ok? output)
+                            (let ([version (extract-version (Ok->value output))])
+                              (set! *wakatime-editor-version* version)
+                              version)
+                            (loop (cdr remaining))))
+                      (loop (cdr remaining))))))))))
 
 (define (wakatime-plugin-string)
   (string-append
