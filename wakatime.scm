@@ -8,7 +8,7 @@
 (provide install-wakatime-plugin!)
 
 (define *wakatime-installed* #f)
-(define *wakatime-doc-generations* (box (hash)))
+(define *wakatime-doc-generations* (hash))
 (define *wakatime-cli* "wakatime-cli")
 (define *wakatime-editor-name* "helix")
 (define *wakatime-editor-version* #f)
@@ -74,21 +74,23 @@
   (let ([path (doc->path-string doc-id)])
     (and path (not (equal? path "")))))
 
-(define (doc-generation doc-id)
-  (let ([doc-generations (unbox *wakatime-doc-generations*)])
-    (if (hash-contains? doc-generations doc-id)
-        (hash-get doc-generations doc-id)
-        0)))
+(define (doc->debounce-key doc-id)
+  (doc->path-string doc-id))
 
-(define (bump-doc-generation! doc-id)
-  (let ([next-generation (+ (doc-generation doc-id) 1)])
-    (set-box! *wakatime-doc-generations*
-              (hash-insert (unbox *wakatime-doc-generations*) doc-id next-generation))
+(define (doc-generation doc-key)
+  (if (hash-contains? *wakatime-doc-generations* doc-key)
+      (hash-get *wakatime-doc-generations* doc-key)
+      0))
+
+(define (bump-doc-generation! doc-key)
+  (let ([next-generation (+ (doc-generation doc-key) 1)])
+    (set! *wakatime-doc-generations*
+          (hash-insert *wakatime-doc-generations* doc-key next-generation))
     next-generation))
 
-(define (clear-doc-generation! doc-id)
-  (set-box! *wakatime-doc-generations*
-            (hash-remove (unbox *wakatime-doc-generations*) doc-id)))
+(define (clear-doc-generation! doc-key)
+  (set! *wakatime-doc-generations*
+        (hash-remove *wakatime-doc-generations* doc-key)))
 
 (define (wakatime-command-args path language is-write)
   (append
@@ -137,46 +139,17 @@
 (define (schedule-idle-heartbeat! doc-id)
   (if (not (doc-trackable? doc-id))
       #f
-      (let ([generation (bump-doc-generation! doc-id)])
-        (log-info
-          (string-append
-            "scheduled debounce for doc "
-            (to-string doc-id)
-            " generation "
-            (to-string generation)))
-        (enqueue-thread-local-callback-with-delay
-          *wakatime-idle-delay-ms*
-          (lambda ()
-            (let ([current-generation (doc-generation doc-id)]
-                  [doc-exists (editor-doc-exists? doc-id)])
-              (log-info
-                (string-append
-                  "debounce fired for doc "
-                  (to-string doc-id)
-                  " scheduled-generation="
-                  (to-string generation)
-                  " current-generation="
-                  (to-string current-generation)
-                  " exists="
-                  (to-string doc-exists)))
-              (if (and doc-exists
-                       (= current-generation generation))
-                  (begin
-                    (log-info
-                      (string-append
-                        "debounce accepted for doc "
-                        (to-string doc-id)
-                        " generation "
-                        (to-string generation)))
-                    (send-heartbeat! doc-id #f))
-                  (begin
-                    (log-info
-                      (string-append
-                        "debounce skipped for doc "
-                        (to-string doc-id)
-                        " generation "
-                        (to-string generation)))
-                    #f)))))))
+      (let ([doc-key (doc->debounce-key doc-id)])
+        (let ([generation (bump-doc-generation! doc-key)])
+          (enqueue-thread-local-callback-with-delay
+            *wakatime-idle-delay-ms*
+            (lambda ()
+              (let ([current-generation (doc-generation doc-key)]
+                    [doc-exists (editor-doc-exists? doc-id)])
+                (if (and doc-exists
+                         (= current-generation generation))
+                    (send-heartbeat! doc-id #f)
+                    #f))))))))
 
 (define (register-wakatime-hooks!)
   (register-hook 'document-opened
@@ -193,7 +166,10 @@
                    (schedule-idle-heartbeat! doc-id)))
   (register-hook 'document-closed
                  (lambda (closed-event)
-                   (clear-doc-generation! (doc-closed-id closed-event)))))
+                   (let ([path (doc-closed-path closed-event)])
+                     (if (equal? path "")
+                         #f
+                         (clear-doc-generation! path))))))
 
 (define (install-wakatime-plugin!)
   (if *wakatime-installed*
