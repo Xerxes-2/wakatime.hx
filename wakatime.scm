@@ -8,7 +8,7 @@
 (provide install-wakatime-plugin!)
 
 (define *wakatime-installed* #f)
-(define *wakatime-doc-generations* (hash))
+(define *wakatime-doc-generations* (box (hash)))
 (define *wakatime-cli* "wakatime-cli")
 (define *wakatime-editor-name* "helix")
 (define *wakatime-editor-version* #f)
@@ -75,19 +75,20 @@
     (and path (not (equal? path "")))))
 
 (define (doc-generation doc-id)
-  (if (hash-contains? *wakatime-doc-generations* doc-id)
-      (hash-get *wakatime-doc-generations* doc-id)
-      0))
+  (let ([doc-generations (unbox *wakatime-doc-generations*)])
+    (if (hash-contains? doc-generations doc-id)
+        (hash-get doc-generations doc-id)
+        0)))
 
 (define (bump-doc-generation! doc-id)
   (let ([next-generation (+ (doc-generation doc-id) 1)])
-    (set! *wakatime-doc-generations*
-          (hash-insert *wakatime-doc-generations* doc-id next-generation))
+    (set-box! *wakatime-doc-generations*
+              (hash-insert (unbox *wakatime-doc-generations*) doc-id next-generation))
     next-generation))
 
 (define (clear-doc-generation! doc-id)
-  (set! *wakatime-doc-generations*
-        (hash-remove *wakatime-doc-generations* doc-id)))
+  (set-box! *wakatime-doc-generations*
+            (hash-remove (unbox *wakatime-doc-generations*) doc-id)))
 
 (define (wakatime-command-args path language is-write)
   (append
@@ -137,13 +138,45 @@
   (if (not (doc-trackable? doc-id))
       #f
       (let ([generation (bump-doc-generation! doc-id)])
+        (log-info
+          (string-append
+            "scheduled debounce for doc "
+            (to-string doc-id)
+            " generation "
+            (to-string generation)))
         (enqueue-thread-local-callback-with-delay
           *wakatime-idle-delay-ms*
           (lambda ()
-            (if (and (editor-doc-exists? doc-id)
-                     (= (doc-generation doc-id) generation))
-                (send-heartbeat! doc-id #f)
-                #f))))))
+            (let ([current-generation (doc-generation doc-id)]
+                  [doc-exists (editor-doc-exists? doc-id)])
+              (log-info
+                (string-append
+                  "debounce fired for doc "
+                  (to-string doc-id)
+                  " scheduled-generation="
+                  (to-string generation)
+                  " current-generation="
+                  (to-string current-generation)
+                  " exists="
+                  (to-string doc-exists)))
+              (if (and doc-exists
+                       (= current-generation generation))
+                  (begin
+                    (log-info
+                      (string-append
+                        "debounce accepted for doc "
+                        (to-string doc-id)
+                        " generation "
+                        (to-string generation)))
+                    (send-heartbeat! doc-id #f))
+                  (begin
+                    (log-info
+                      (string-append
+                        "debounce skipped for doc "
+                        (to-string doc-id)
+                        " generation "
+                        (to-string generation)))
+                    #f)))))))
 
 (define (register-wakatime-hooks!)
   (register-hook 'document-opened
