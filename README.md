@@ -5,7 +5,7 @@
 - document open
 - document save
 - document focus loss
-- document changes after a short idle delay
+- document changes after a short idle delay (true debounce)
 
 ## Requirements
 
@@ -31,5 +31,5 @@ The plugin installs itself when required.
 ## Notes
 
 - The plugin reports itself as `wakatime.hx/0.1.0`.
-- Idle heartbeats are debounced by 2000 ms.
+- Idle heartbeats use a true 2000 ms debounce and fire after the last edit in a burst.
 - Untitled buffers are ignored because WakaTime only receives file-backed entities.

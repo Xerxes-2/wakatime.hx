@@ -8,7 +8,7 @@
 (provide install-wakatime-plugin!)
 
 (define *wakatime-installed* #f)
-(define *wakatime-pending-docs* (hash))
+(define *wakatime-doc-generations* (hash))
 (define *wakatime-cli* "wakatime-cli")
 (define *wakatime-editor-name* "helix")
 (define *wakatime-editor-version* #f)
@@ -74,13 +74,20 @@
   (let ([path (doc->path-string doc-id)])
     (and path (not (equal? path "")))))
 
-(define (pending-doc? doc-id)
-  (and (hash-contains? *wakatime-pending-docs* doc-id)
-       (hash-get *wakatime-pending-docs* doc-id)))
+(define (doc-generation doc-id)
+  (if (hash-contains? *wakatime-doc-generations* doc-id)
+      (hash-get *wakatime-doc-generations* doc-id)
+      0))
 
-(define (set-pending-doc! doc-id value)
-  (set! *wakatime-pending-docs*
-        (hash-insert *wakatime-pending-docs* doc-id value)))
+(define (bump-doc-generation! doc-id)
+  (let ([next-generation (+ (doc-generation doc-id) 1)])
+    (set! *wakatime-doc-generations*
+          (hash-insert *wakatime-doc-generations* doc-id next-generation))
+    next-generation))
+
+(define (clear-doc-generation! doc-id)
+  (set! *wakatime-doc-generations*
+        (hash-remove *wakatime-doc-generations* doc-id)))
 
 (define (wakatime-command-args path language is-write)
   (append
@@ -127,15 +134,14 @@
         #f)))
 
 (define (schedule-idle-heartbeat! doc-id)
-  (if (or (not (doc-trackable? doc-id)) (pending-doc? doc-id))
+  (if (not (doc-trackable? doc-id))
       #f
-      (begin
-        (set-pending-doc! doc-id #t)
+      (let ([generation (bump-doc-generation! doc-id)])
         (enqueue-thread-local-callback-with-delay
           *wakatime-idle-delay-ms*
           (lambda ()
-            (set-pending-doc! doc-id #f)
-            (if (editor-doc-exists? doc-id)
+            (if (and (editor-doc-exists? doc-id)
+                     (= (doc-generation doc-id) generation))
                 (send-heartbeat! doc-id #f)
                 #f))))))
 
@@ -151,7 +157,10 @@
                    (send-heartbeat! doc-id #f)))
   (register-hook 'document-changed
                  (lambda (doc-id _old-text)
-                   (schedule-idle-heartbeat! doc-id))))
+                   (schedule-idle-heartbeat! doc-id)))
+  (register-hook 'document-closed
+                 (lambda (closed-event)
+                   (clear-doc-generation! (doc-closed-id closed-event)))))
 
 (define (install-wakatime-plugin!)
   (if *wakatime-installed*
