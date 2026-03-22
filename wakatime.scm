@@ -209,8 +209,7 @@
   ;; No document-focus-gained hook exists; use selection-did-change as a proxy
   ;; so that switching to a file registers activity. Throttling prevents noise.
   (register-hook 'selection-did-change
-                 (lambda (view-id)
-                   (send-heartbeat! (editor->doc-id view-id) #f)))
+                 (lambda (view-id) (send-heartbeat! (editor->doc-id view-id) #f)))
   ;; Clean up the generation counter when a document is closed
   (register-hook 'document-closed
                  (lambda (closed-event)
