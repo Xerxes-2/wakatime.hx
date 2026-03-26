@@ -105,9 +105,6 @@
 (define (doc->path-string doc-id)
   (editor-document->path doc-id))
 
-(define (doc->language-string doc-id)
-  (or (editor-document->language doc-id) "text"))
-
 ;; ---------------------------------------------------------------------------
 ;; Debounce: generation counter per file path
 ;; ---------------------------------------------------------------------------
@@ -133,15 +130,8 @@
 ;; ---------------------------------------------------------------------------
 
 ;; Build the argument list for wakatime-cli.
-(define (wakatime-command-args path language is-write)
-  (append (list "--entity"
-                path
-                "--entity-type"
-                "file"
-                "--plugin"
-                (wakatime-plugin-string)
-                "--language"
-                language)
+(define (wakatime-command-args path is-write)
+  (append (list "--entity" path "--entity-type" "file" "--plugin" (wakatime-plugin-string))
           (if is-write
               (list "--write")
               '())))
@@ -163,16 +153,15 @@
         (log-warn "skipping heartbeat for untrackable document")
         (if (not (should-send-heartbeat? path is-write))
             #f
-            (let ([language (doc->language-string doc-id)])
+            (begin
               (set! *wakatime-last-heartbeat-times*
                     (hash-insert *wakatime-last-heartbeat-times* path (current-milliseconds)))
               (log-info
                (string-append "sending " (if is-write "write" "activity") " heartbeat for " path))
               (spawn-native-thread
                (lambda ()
-                 (let ([spawned (spawn-process
-                                 (command *wakatime-cli*
-                                          (wakatime-command-args path language is-write)))])
+                 (let ([spawned (spawn-process (command *wakatime-cli*
+                                                        (wakatime-command-args path is-write)))])
                    (if (Ok? spawned)
                        (let ([status (wait (Ok->value spawned))])
                          (if (and (Ok? status) (equal? (Ok->value status) 0))
