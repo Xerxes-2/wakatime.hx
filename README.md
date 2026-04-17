@@ -31,7 +31,7 @@ The plugin installs itself when required.
 
 ## Notes
 
-- The plugin sends `helix/<ver> helix-wakatime/0.1.0` as its `--plugin` string, matching the 2-segment convention used by vscode-wakatime, sublime-wakatime, etc.
+- The plugin sends `helix/<ver> wakatime-hx/0.1.0` as its `--plugin` string, matching the 2-segment convention used by vscode-wakatime, sublime-wakatime, etc.
 - Idle heartbeats use a true 2000 ms debounce and fire after the last edit in a burst.
 - Activity heartbeats are throttled to at most once per 2 minutes per file; write events always go through.
 - Untitled buffers are ignored because WakaTime only receives file-backed entities.
