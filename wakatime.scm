@@ -8,6 +8,7 @@
 
 (require "helix/editor.scm")
 (require "helix/misc.scm")
+(require "helix/static.scm")
 (require "steel/result")
 
 (require-builtin steel/core/result)
@@ -187,10 +188,16 @@
   (log-info! (string-append "sending " (heartbeat-kind is-write) " heartbeat for " path)))
 
 ;; Build the argument list for wakatime-cli.
-(define (wakatime-command-args path is-write)
+(define (wakatime-command-args path is-write lineno cursorpos)
   (append (list "--entity" path "--entity-type" "file" "--plugin" (wakatime-plugin-string!))
           (if is-write
               (list "--write")
+              '())
+          (if lineno
+              (list "--lineno" (int->string lineno))
+              '())
+          (if cursorpos
+              (list "--cursorpos" (int->string cursorpos))
               '())))
 
 (define (wait-for-heartbeat! process path)
@@ -198,28 +205,41 @@
     (unless (and (Ok? status) (equal? (Ok->value status) 0))
       (warn-non-zero-exit! path))))
 
-(define (run-wakatime-cli! path is-write)
-  (let ([spawned (spawn-process (command *wakatime-cli* (wakatime-command-args path is-write)))])
+(define (run-wakatime-cli! path is-write lineno cursorpos)
+  (let ([spawned (spawn-process (command *wakatime-cli*
+                                         (wakatime-command-args path is-write lineno cursorpos)))])
     (if (Ok? spawned)
         (wait-for-heartbeat! (Ok->value spawned) path)
         (warn-spawn-failed! path))))
 
-(define (spawn-heartbeat-thread! path is-write)
-  (spawn-native-thread (lambda () (run-wakatime-cli! path is-write))))
+(define (spawn-heartbeat-thread! path is-write lineno cursorpos)
+  (spawn-native-thread (lambda () (run-wakatime-cli! path is-write lineno cursorpos))))
 
-(define (send-heartbeat-for-path! path is-write)
+(define (send-heartbeat-for-path! path is-write lineno cursorpos)
   (cond
     [(not (trackable-path? path)) (warn-untrackable-document!)]
     [(not (should-send-heartbeat? path is-write)) #f]
     [else
      (record-heartbeat-instant! path)
      (log-heartbeat-start! path is-write)
-     (spawn-heartbeat-thread! path is-write)]))
+     (spawn-heartbeat-thread! path is-write lineno cursorpos)]))
+
+;; Get current cursor info (lineno . cursorpos), or #f for each if unavailable.
+(define (current-cursor-info)
+  (let ([lineno (try-result (get-current-line-number))]
+        [cursorpos (try-result (cursor-position))])
+    (cons (if (Ok? lineno)
+              (Ok->value lineno)
+              #f)
+          (if (Ok? cursorpos)
+              (Ok->value cursorpos)
+              #f))))
 
 ;; Send a heartbeat for doc-id on a background thread.
 ;; Skips untitled / empty-path documents and throttled duplicates.
 (define (send-heartbeat! doc-id is-write)
-  (send-heartbeat-for-path! (doc->path-string doc-id) is-write))
+  (let ([info (current-cursor-info)])
+    (send-heartbeat-for-path! (doc->path-string doc-id) is-write (car info) (cdr info))))
 
 (define (send-activity-heartbeat! doc-id)
   (send-heartbeat! doc-id #f))
