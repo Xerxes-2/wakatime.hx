@@ -89,7 +89,7 @@
 
 ;; single command
 (define (detect-version-with command-name)
-  (~> (command command-name (list "--version"))
+  (~> (command command-name '("--version"))
       with-stdout-piped
       spawn-process
       (ok-and-then wait->stdout)
@@ -211,7 +211,9 @@
       (command (wakatime-command-args path is-write lineno cursorpos))
       spawn-process
       (ok-and-then (lambda (proc) (wait-for-heartbeat! proc path)))
-      (unwrap-or (warn-spawn-failed! path))))
+      Err?
+      (when (warn-spawn-failed! path)
+        )))
 
 (define (spawn-heartbeat-thread! path is-write lineno cursorpos)
   (spawn-native-thread (lambda () (run-wakatime-cli! path is-write lineno cursorpos))))
