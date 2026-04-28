@@ -89,10 +89,11 @@
 
 ;; single command
 (define (detect-version-with command-name)
-  (ok-and-then (ok-and-then (spawn-process (with-stdout-piped (command command-name
-                                                                       (list "--version"))))
-                            wait->stdout)
-               extract-version))
+  (~> (command command-name (list "--version"))
+      with-stdout-piped
+      spawn-process
+      (ok-and-then wait->stdout)
+      (ok-and-then extract-version)))
 
 ;; list of possible commands
 (define (detect-editor-version commands)
@@ -206,11 +207,11 @@
       (warn-non-zero-exit! path))))
 
 (define (run-wakatime-cli! path is-write lineno cursorpos)
-  (let ([spawned (spawn-process (command *wakatime-cli*
-                                         (wakatime-command-args path is-write lineno cursorpos)))])
-    (if (Ok? spawned)
-        (wait-for-heartbeat! (Ok->value spawned) path)
-        (warn-spawn-failed! path))))
+  (~> (wakatime-command-args path is-write lineno cursorpos)
+      (command *wakatime-cli*)
+      spawn-process
+      (ok-and-then (lambda (proc) (wait-for-heartbeat! proc path)))
+      (unwrap-or (warn-spawn-failed! path))))
 
 (define (spawn-heartbeat-thread! path is-write lineno cursorpos)
   (spawn-native-thread (lambda () (run-wakatime-cli! path is-write lineno cursorpos))))
