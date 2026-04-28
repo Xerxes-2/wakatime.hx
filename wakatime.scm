@@ -75,10 +75,8 @@
                                                (Ok (begin
                                                      body ...))))))]))
 
-(define identity (lambda (x) x))
-
 (define (hash-get/default table key default)
-  (unwrap-or (try-result (hash-get table key)) default))
+  (or (hash-try-get table key) default))
 
 ;; ---------------------------------------------------------------------------
 ;; Editor version detection
