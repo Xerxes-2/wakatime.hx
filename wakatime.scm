@@ -194,10 +194,10 @@
           (if is-write
               (list "--write")
               '())
-          (if lineno
+          (if (and lineno (> lineno 0))
               (list "--lineno" (int->string lineno))
               '())
-          (if cursorpos
+          (if (and cursorpos (> cursorpos 0))
               (list "--cursorpos" (int->string cursorpos))
               '())))
 
