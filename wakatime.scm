@@ -207,8 +207,8 @@
       (warn-non-zero-exit! path))))
 
 (define (run-wakatime-cli! path is-write lineno cursorpos)
-  (~> (wakatime-command-args path is-write lineno cursorpos)
-      (command *wakatime-cli*)
+  (~> *wakatime-cli*
+      (command (wakatime-command-args path is-write lineno cursorpos))
       spawn-process
       (ok-and-then (lambda (proc) (wait-for-heartbeat! proc path)))
       (unwrap-or (warn-spawn-failed! path))))
