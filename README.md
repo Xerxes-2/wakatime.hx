@@ -6,7 +6,7 @@
 - document save
 - document focus loss
 - document changes after a short idle delay (true debounce)
-- selection/cursor changes (as a focus-gained proxy)
+- document switches detected via selection changes (as a focus-gained proxy)
 
 ## Requirements
 

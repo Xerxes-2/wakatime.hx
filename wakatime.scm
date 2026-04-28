@@ -8,6 +8,7 @@
 
 (require "helix/editor.scm")
 (require "helix/misc.scm")
+(require "steel/result")
 
 (require-builtin steel/core/result)
 (require-builtin steel/process)
@@ -25,7 +26,7 @@
 (define *wakatime-doc-generations* (hash))
 (define *wakatime-cli* "wakatime-cli")
 (define *wakatime-editor-name* "helix")
-;; cached on first successful detection
+;; cached after the first detection attempt
 (define *wakatime-editor-version* #f)
 ;; cached after first build so the string isn't rebuilt per heartbeat
 (define *wakatime-plugin-string* #f)
@@ -34,19 +35,50 @@
 (define *wakatime-idle-delay-ms* 2000)
 ;; Throttle: skip repeat activity heartbeats for the same file within this window.
 ;; Write events always go through regardless.
-(define *wakatime-throttle-ms* 120000)
-;; path -> last heartbeat timestamp (ms)
-(define *wakatime-last-heartbeat-times* (hash))
+(define *wakatime-throttle-seconds* 120)
+;; path -> last heartbeat instant
+(define *wakatime-last-heartbeat-instants* (hash))
+;; Last document observed through selection changes. Used to avoid treating every
+;; cursor movement as focus activity.
+(define *wakatime-last-active-doc-id* #f)
 
 ;; ---------------------------------------------------------------------------
 ;; Logging helpers
 ;; ---------------------------------------------------------------------------
 
-(define (log-info message)
+(define (log-info! message)
   (log::info! (string-append "[wakatime] " message)))
 
-(define (log-warn message)
+(define (log-warn! message)
   (log::warn! (string-append "[wakatime] " message)))
+
+(define (warn-untrackable-document!)
+  (log-warn! "skipping heartbeat for untrackable document"))
+
+(define (warn-spawn-failed! path)
+  (log-warn! (string-append "failed spawning wakatime-cli for " path)))
+
+(define (warn-non-zero-exit! path)
+  (log-warn! (string-append "heartbeat exited non-zero for " path)))
+
+;; ---------------------------------------------------------------------------
+;; Generic helpers
+;; ---------------------------------------------------------------------------
+
+;; Convert exception style error to Result
+(define-syntax try-result
+  (syntax-rules ()
+    [(try-result body ...)
+     (call/cc (lambda (k)
+                (call-with-exception-handler (lambda (exn) (k (Err exn)))
+                                             (lambda ()
+                                               (Ok (begin
+                                                     body ...))))))]))
+
+(define identity (lambda (x) x))
+
+(define (hash-get/default table key default)
+  (unwrap-or (try-result (hash-get table key)) default))
 
 ;; ---------------------------------------------------------------------------
 ;; Editor version detection
@@ -54,39 +86,35 @@
 
 ;; Parse "helix 24.7" → "24.7"
 (define (extract-version output)
-  (let ([parts (split-many (trim output) " ")])
-    (if (> (length parts) 1)
-        (list-ref parts 1)
-        "unknown")))
+  (~> output trim split-whitespace second try-result))
+
+;; single command
+(define (detect-version-with command-name)
+  (ok-and-then (ok-and-then (spawn-process (with-stdout-piped (command command-name
+                                                                       (list "--version"))))
+                            wait->stdout)
+               extract-version))
+
+;; list of possible commands
+(define (detect-editor-version commands)
+  (if (null? commands)
+      "unknown"
+      (unwrap-or (detect-version-with (car commands)) (detect-editor-version (cdr commands)))))
 
 ;; Try "hx --version", then "helix --version"; cache the result.
-(define (editor-version)
-  (if *wakatime-editor-version*
-      *wakatime-editor-version*
-      (let ([commands '("hx" "helix")])
-        (let loop ([remaining commands])
-          (if (null? remaining)
-              (begin
-                (set! *wakatime-editor-version* "unknown")
-                "unknown")
-              (let ([spawned (spawn-process (with-stdout-piped (command (car remaining)
-                                                                        (list "--version"))))])
-                (if (Ok? spawned)
-                    (let ([output (wait->stdout (Ok->value spawned))])
-                      (if (Ok? output)
-                          (let ([version (extract-version (Ok->value output))])
-                            (set! *wakatime-editor-version* version)
-                            version)
-                          (loop (cdr remaining))))
-                    (loop (cdr remaining)))))))))
+(define (editor-version!)
+  (or *wakatime-editor-version*
+      (let ([version (detect-editor-version '("hx" "helix"))])
+        (set! *wakatime-editor-version* version)
+        version)))
 
 ;; Build the --plugin flag value, e.g. "helix/24.7 wakatime-hx/0.1.0".
 ;; Cached after first call.
-(define (wakatime-plugin-string)
+(define (wakatime-plugin-string!)
   (or *wakatime-plugin-string*
       (let ([s (string-append *wakatime-editor-name*
                               "/"
-                              (editor-version)
+                              (editor-version!)
                               " "
                               *wakatime-plugin-name*
                               "/"
@@ -101,14 +129,15 @@
 (define (doc->path-string doc-id)
   (editor-document->path doc-id))
 
+(define (trackable-path? path)
+  (and path (not (equal? path ""))))
+
 ;; ---------------------------------------------------------------------------
-;; Debounce: generation counter per file path
+;; Document state
 ;; ---------------------------------------------------------------------------
 
 (define (doc-generation doc-key)
-  (if (hash-contains? *wakatime-doc-generations* doc-key)
-      (hash-get *wakatime-doc-generations* doc-key)
-      0))
+  (hash-get/default *wakatime-doc-generations* doc-key 0))
 
 (define (bump-doc-generation! doc-key)
   (let ([next-generation (+ (doc-generation doc-key) 1)])
@@ -118,99 +147,152 @@
 (define (clear-doc-generation! doc-key)
   (set! *wakatime-doc-generations* (hash-remove *wakatime-doc-generations* doc-key)))
 
-(define (clear-last-heartbeat-time! path)
-  (set! *wakatime-last-heartbeat-times* (hash-remove *wakatime-last-heartbeat-times* path)))
+(define (clear-active-doc!)
+  (set! *wakatime-last-active-doc-id* #f))
+
+;; ---------------------------------------------------------------------------
+;; Activity throttling
+;; ---------------------------------------------------------------------------
+
+(define (last-heartbeat-instant path)
+  (hash-get/default *wakatime-last-heartbeat-instants* path #f))
+
+(define (record-heartbeat-instant! path)
+  (set! *wakatime-last-heartbeat-instants*
+        (hash-insert *wakatime-last-heartbeat-instants* path (instant/now))))
+
+(define (clear-last-heartbeat-instant! path)
+  (set! *wakatime-last-heartbeat-instants* (hash-remove *wakatime-last-heartbeat-instants* path)))
+
+(define (clear-document-state! path)
+  (clear-doc-generation! path)
+  (clear-last-heartbeat-instant! path))
+
+(define (duration-since-in-seconds instant)
+  (duration->seconds (duration-since (instant/now) instant)))
+
+(define (throttle-expired? last-instant)
+  (or (not last-instant) (>= (duration-since-in-seconds last-instant) *wakatime-throttle-seconds*)))
+
+;; Write events always pass; activity heartbeats are throttled per file.
+(define (should-send-heartbeat? path is-write)
+  (or is-write (throttle-expired? (last-heartbeat-instant path))))
 
 ;; ---------------------------------------------------------------------------
 ;; Heartbeat sending
 ;; ---------------------------------------------------------------------------
 
+(define (heartbeat-kind is-write)
+  (if is-write "write" "activity"))
+
+(define (log-heartbeat-start! path is-write)
+  (log-info! (string-append "sending " (heartbeat-kind is-write) " heartbeat for " path)))
+
 ;; Build the argument list for wakatime-cli.
 (define (wakatime-command-args path is-write)
-  (append (list "--entity" path "--entity-type" "file" "--plugin" (wakatime-plugin-string))
+  (append (list "--entity" path "--entity-type" "file" "--plugin" (wakatime-plugin-string!))
           (if is-write
               (list "--write")
               '())))
 
-;; Should we send a heartbeat? Write events always pass;
-;; activity heartbeats are throttled to once per 2 minutes per file.
-(define (should-send-heartbeat? path is-write)
-  (or is-write
-      (let ([last (if (hash-contains? *wakatime-last-heartbeat-times* path)
-                      (hash-get *wakatime-last-heartbeat-times* path)
-                      0)])
-        (> (- (current-milliseconds) last) *wakatime-throttle-ms*))))
+(define (wait-for-heartbeat! process path)
+  (let ([status (wait process)])
+    (unless (and (Ok? status) (equal? (Ok->value status) 0))
+      (warn-non-zero-exit! path))))
+
+(define (run-wakatime-cli! path is-write)
+  (let ([spawned (spawn-process (command *wakatime-cli* (wakatime-command-args path is-write)))])
+    (if (Ok? spawned)
+        (wait-for-heartbeat! (Ok->value spawned) path)
+        (warn-spawn-failed! path))))
+
+(define (spawn-heartbeat-thread! path is-write)
+  (spawn-native-thread (lambda () (run-wakatime-cli! path is-write))))
+
+(define (send-heartbeat-for-path! path is-write)
+  (cond
+    [(not (trackable-path? path)) (warn-untrackable-document!)]
+    [(not (should-send-heartbeat? path is-write)) #f]
+    [else
+     (record-heartbeat-instant! path)
+     (log-heartbeat-start! path is-write)
+     (spawn-heartbeat-thread! path is-write)]))
 
 ;; Send a heartbeat for doc-id on a background thread.
 ;; Skips untitled / empty-path documents and throttled duplicates.
 (define (send-heartbeat! doc-id is-write)
-  (let ([path (doc->path-string doc-id)])
-    (if (not (and path (not (equal? path ""))))
-        (log-warn "skipping heartbeat for untrackable document")
-        (if (not (should-send-heartbeat? path is-write))
-            #f
-            (begin
-              (set! *wakatime-last-heartbeat-times*
-                    (hash-insert *wakatime-last-heartbeat-times* path (current-milliseconds)))
-              (log-info
-               (string-append "sending " (if is-write "write" "activity") " heartbeat for " path))
-              (spawn-native-thread
-               (lambda ()
-                 (let ([spawned (spawn-process (command *wakatime-cli*
-                                                        (wakatime-command-args path is-write)))])
-                   (if (Ok? spawned)
-                       (let ([status (wait (Ok->value spawned))])
-                         (if (and (Ok? status) (equal? (Ok->value status) 0))
-                             #t
-                             (log-warn (string-append "heartbeat exited non-zero for " path))))
-                       (log-warn (string-append "failed spawning wakatime-cli for " path)))))))))))
+  (send-heartbeat-for-path! (doc->path-string doc-id) is-write))
+
+(define (send-activity-heartbeat! doc-id)
+  (send-heartbeat! doc-id #f))
+
+(define (send-write-heartbeat! doc-id)
+  (send-heartbeat! doc-id #t))
+
+;; ---------------------------------------------------------------------------
+;; Idle heartbeat debounce
+;; ---------------------------------------------------------------------------
+
+(define (idle-heartbeat-current? doc-id path generation)
+  (and (editor-doc-exists? doc-id) (= (doc-generation path) generation)))
+
+(define (send-idle-heartbeat-if-current! doc-id path generation)
+  (when (idle-heartbeat-current? doc-id path generation)
+    (send-activity-heartbeat! doc-id)))
+
+(define (schedule-idle-heartbeat-for-path! doc-id path)
+  (let ([generation (bump-doc-generation! path)])
+    (enqueue-thread-local-callback-with-delay
+     *wakatime-idle-delay-ms*
+     (lambda () (send-idle-heartbeat-if-current! doc-id path generation)))))
 
 ;; Schedule a debounced idle heartbeat.
 ;; Each call bumps the generation counter; the delayed callback only fires
 ;; if no further edits have occurred (i.e. generation hasn't changed).
 (define (schedule-idle-heartbeat! doc-id)
-  (let ([doc-key (doc->path-string doc-id)])
-    (if (not (and doc-key (not (equal? doc-key ""))))
-        #f
-        (let ([generation (bump-doc-generation! doc-key)])
-          (enqueue-thread-local-callback-with-delay
-           *wakatime-idle-delay-ms*
-           (lambda ()
-             (let ([current-generation (doc-generation doc-key)]
-                   [doc-exists (editor-doc-exists? doc-id)])
-               (if (and doc-exists (= current-generation generation))
-                   (send-heartbeat! doc-id #f)
-                   #f))))))))
+  (let ([path (doc->path-string doc-id)])
+    (when (trackable-path? path)
+      (schedule-idle-heartbeat-for-path! doc-id path))))
+
+;; ---------------------------------------------------------------------------
+;; Hook handlers
+;; ---------------------------------------------------------------------------
+
+(define (handle-document-changed! doc-id _old-text)
+  (schedule-idle-heartbeat! doc-id))
+
+(define (handle-selection-did-change! view-id)
+  (let ([doc-id (editor->doc-id view-id)])
+    (when (and doc-id (not (equal? doc-id *wakatime-last-active-doc-id*)))
+      (set! *wakatime-last-active-doc-id* doc-id)
+      (send-activity-heartbeat! doc-id))))
+
+(define (handle-document-closed! closed-event)
+  (clear-active-doc!)
+  (let ([path (doc-closed-path closed-event)])
+    (when (trackable-path? path)
+      (clear-document-state! path))))
 
 ;; ---------------------------------------------------------------------------
 ;; Hook registration & plugin entry point
 ;; ---------------------------------------------------------------------------
 
 (define (register-wakatime-hooks!)
-  (register-hook 'document-opened (lambda (doc-id) (send-heartbeat! doc-id #f)))
-  (register-hook 'document-saved (lambda (doc-id) (send-heartbeat! doc-id #t)))
-  (register-hook 'document-focus-lost (lambda (doc-id) (send-heartbeat! doc-id #f)))
-  (register-hook 'document-changed (lambda (doc-id _old-text) (schedule-idle-heartbeat! doc-id)))
-  ;; No document-focus-gained hook exists; use selection-did-change as a proxy
-  ;; so that switching to a file registers activity. Throttling prevents noise.
-  (register-hook 'selection-did-change
-                 (lambda (view-id) (send-heartbeat! (editor->doc-id view-id) #f)))
+  (register-hook 'document-opened send-activity-heartbeat!)
+  (register-hook 'document-saved send-write-heartbeat!)
+  (register-hook 'document-focus-lost send-activity-heartbeat!)
+  (register-hook 'document-changed handle-document-changed!)
+  ;; No document-focus-gained hook exists; use selection-did-change as a proxy.
+  ;; Only document switches register activity; cursor movement is ignored here.
+  (register-hook 'selection-did-change handle-selection-did-change!)
   ;; Clean up the generation counter when a document is closed
-  (register-hook 'document-closed
-                 (lambda (closed-event)
-                   (let ([path (doc-closed-path closed-event)])
-                     (if (equal? path "")
-                         #f
-                         (begin
-                           (clear-doc-generation! path)
-                           (clear-last-heartbeat-time! path)))))))
+  (register-hook 'document-closed handle-document-closed!))
 
 (define (install-wakatime-plugin!)
-  (if *wakatime-installed*
-      #f
-      (begin
-        (set! *wakatime-installed* #t)
-        (register-wakatime-hooks!)
-        (set-status! "wakatime plugin loaded"))))
+  (unless *wakatime-installed*
+    (set! *wakatime-installed* #t)
+    (wakatime-plugin-string!)
+    (register-wakatime-hooks!)
+    (set-status! "wakatime plugin loaded")))
 
 (install-wakatime-plugin!)
