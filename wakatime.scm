@@ -203,7 +203,7 @@
 
 (define (wait-for-heartbeat! process path)
   (let ([status (wait process)])
-    (unless (and (Ok? status) (equal? (Ok->value status) 0))
+    (unless (equal? status (Ok 0))
       (warn-non-zero-exit! path))))
 
 (define (run-wakatime-cli! path is-write lineno cursorpos)
@@ -229,12 +229,7 @@
 (define (current-cursor-info)
   (let ([lineno (try-result (get-current-line-number))]
         [cursorpos (try-result (cursor-position))])
-    (cons (if (Ok? lineno)
-              (Ok->value lineno)
-              #f)
-          (if (Ok? cursorpos)
-              (Ok->value cursorpos)
-              #f))))
+    (cons (unwrap-or lineno #f) (unwrap-or cursorpos #f))))
 
 ;; Send a heartbeat for doc-id on a background thread.
 ;; Skips untitled / empty-path documents and throttled duplicates.
