@@ -31,7 +31,8 @@
 (define *wakatime-editor-version* #f)
 ;; cached after first build so the string isn't rebuilt per heartbeat
 (define *wakatime-plugin-string* #f)
-(define *wakatime-plugin-name* "wakatime-hx")
+;; Wakapi's user-agent parser recognizes editor plugins named "<editor>-wakatime".
+(define *wakatime-plugin-name* "helix-wakatime")
 (define *wakatime-plugin-version* "0.1.0")
 (define *wakatime-idle-delay-ms* 2000)
 ;; Throttle: skip repeat activity heartbeats for the same file within this window.
@@ -108,7 +109,7 @@
         (set! *wakatime-editor-version* version)
         version)))
 
-;; Build the --plugin flag value, e.g. "helix/24.7 wakatime-hx/0.1.0".
+;; Build the --plugin flag value, e.g. "helix/24.7 helix-wakatime/0.1.0".
 ;; Cached after first call.
 (define (wakatime-plugin-string!)
   (or *wakatime-plugin-string*
