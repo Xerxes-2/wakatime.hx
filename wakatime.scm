@@ -192,12 +192,12 @@
 (define (wakatime-command-args path is-write lineno cursorpos)
   (append (list "--entity" path "--entity-type" "file" "--plugin" (wakatime-plugin-string!))
           (if is-write
-              (list "--write")
+              '("--write")
               '())
-          (if (and lineno (> lineno 0))
+          (if (positive? lineno)
               (list "--lineno" (int->string lineno))
               '())
-          (if (and cursorpos (> cursorpos 0))
+          (if (positive? cursorpos)
               (list "--cursorpos" (int->string cursorpos))
               '())))
 
@@ -227,11 +227,9 @@
      (log-heartbeat-start! path is-write)
      (spawn-heartbeat-thread! path is-write lineno cursorpos)]))
 
-;; Get current cursor info (lineno . cursorpos), or #f for each if unavailable.
+;; Get current cursor info (lineno . cursorpos)
 (define (current-cursor-info)
-  (let ([lineno (try-result (get-current-line-number))]
-        [cursorpos (try-result (cursor-position))])
-    (cons (unwrap-or lineno #f) (unwrap-or cursorpos #f))))
+  (cons (get-current-line-number) (cursor-position)))
 
 ;; Send a heartbeat for doc-id on a background thread.
 ;; Skips untitled / empty-path documents and throttled duplicates.
