@@ -34,6 +34,7 @@
 ;; Wakapi's user-agent parser recognizes editor plugins named "<editor>-wakatime".
 (define *wakatime-plugin-name* "helix-wakatime")
 (define *wakatime-plugin-version* "0.1.0")
+; TODO: make these configurable
 (define *wakatime-idle-delay-ms* 2000)
 ;; Throttle: skip repeat activity heartbeats for the same file within this window.
 ;; Write events always go through regardless.
@@ -205,6 +206,7 @@
 (define (wait-for-heartbeat! process path)
   (let ([status (wait process)])
     (unless (equal? status (Ok 0))
+      ; TODO: log stdout/stderr, show in status
       (warn-non-zero-exit! path))))
 
 (define (run-wakatime-cli! path is-write lineno cursorpos)
@@ -213,6 +215,7 @@
       spawn-process
       (ok-and-then (lambda (proc) (wait-for-heartbeat! proc path)))
       Err?
+      ; TODO: log actual error value, show in status
       (when (warn-spawn-failed! path)
         )))
 
