@@ -308,6 +308,7 @@
 
 (define (install-wakatime-plugin!)
   (unless *wakatime-installed*
+    ; TODO: check wakatime-cli availiablity
     (set! *wakatime-installed* #t)
     (wakatime-plugin-string!)
     (register-wakatime-hooks!)
