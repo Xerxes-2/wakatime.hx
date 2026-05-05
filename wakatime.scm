@@ -44,6 +44,9 @@
 ;; Last document observed through selection changes. Used to avoid treating every
 ;; cursor movement as focus activity.
 (define *wakatime-last-active-doc-id* #f)
+;; Global: path of the last successfully sent heartbeat.
+;; Used to bypass per-path throttle when the active file changes.
+(define *wakatime-last-sent-path* #f)
 
 ;; ---------------------------------------------------------------------------
 ;; Logging helpers
@@ -176,9 +179,11 @@
 (define (throttle-expired? last-instant)
   (or (not last-instant) (>= (duration-since-in-seconds last-instant) *wakatime-throttle-seconds*)))
 
-;; Write events always pass; activity heartbeats are throttled per file.
+;; Write events always pass; file-switch bypasses throttle; otherwise per-file cooldown.
 (define (should-send-heartbeat? path is-write)
-  (or is-write (throttle-expired? (last-heartbeat-instant path))))
+  (or is-write
+      (not (equal? path *wakatime-last-sent-path*))
+      (throttle-expired? (last-heartbeat-instant path))))
 
 ;; ---------------------------------------------------------------------------
 ;; Heartbeat sending
@@ -227,6 +232,7 @@
     [(not (trackable-path? path)) (warn-untrackable-document!)]
     [(not (should-send-heartbeat? path is-write)) #f]
     [else
+     (set! *wakatime-last-sent-path* path)
      (record-heartbeat-instant! path)
      (log-heartbeat-start! path is-write)
      (spawn-heartbeat-thread! path is-write lineno cursorpos)]))
