@@ -16,7 +16,10 @@
 (require-builtin steel/strings)
 (require-builtin steel/time)
 
-(provide install-wakatime-plugin!)
+(provide install-wakatime-plugin!
+         set-wakatime-idle-delay-ms!
+         set-wakatime-throttle-seconds!
+         set-wakatime-cli-path!)
 
 ;; ---------------------------------------------------------------------------
 ;; Configuration & state
@@ -34,7 +37,6 @@
 ;; Wakapi's user-agent parser recognizes editor plugins named "<editor>-wakatime".
 (define *wakatime-plugin-name* "helix-wakatime")
 (define *wakatime-plugin-version* "0.1.0")
-; TODO: make these configurable
 (define *wakatime-idle-delay-ms* 2000)
 ;; Throttle: skip repeat activity heartbeats for the same file within this window.
 ;; Write events always go through regardless.
@@ -49,6 +51,19 @@
 (define *wakatime-last-sent-path* #f)
 
 ;; ---------------------------------------------------------------------------
+;; Configuration setters (call from init.scm before or after install)
+;; ---------------------------------------------------------------------------
+
+(define (set-wakatime-idle-delay-ms! ms)
+  (set! *wakatime-idle-delay-ms* ms))
+
+(define (set-wakatime-throttle-seconds! secs)
+  (set! *wakatime-throttle-seconds* secs))
+
+(define (set-wakatime-cli-path! path)
+  (set! *wakatime-cli* path))
+
+;; ---------------------------------------------------------------------------
 ;; Logging helpers
 ;; ---------------------------------------------------------------------------
 
@@ -60,12 +75,6 @@
 
 (define (warn-untrackable-document!)
   (log-warn! "skipping heartbeat for untrackable document"))
-
-(define (warn-spawn-failed! path)
-  (log-warn! (string-append "failed spawning wakatime-cli for " path)))
-
-(define (warn-non-zero-exit! path)
-  (log-warn! (string-append "heartbeat exited non-zero for " path)))
 
 ;; ---------------------------------------------------------------------------
 ;; Generic helpers
@@ -209,20 +218,26 @@
               '())))
 
 (define (wait-for-heartbeat! process path)
-  (let ([status (wait process)])
+  (let ([stderr-output (read-port-to-string (child-stderr process))]
+        [status (wait process)])
     (unless (equal? status (Ok 0))
-      ; TODO: log stdout/stderr, show in status
-      (warn-non-zero-exit! path))))
+      (log-warn! (string-append "heartbeat exited non-zero for "
+                                path
+                                (if (equal? stderr-output "")
+                                    ""
+                                    (string-append ": " (trim stderr-output))))))))
 
 (define (run-wakatime-cli! path is-write lineno cursorpos)
-  (~> *wakatime-cli*
-      (command (wakatime-command-args path is-write lineno cursorpos))
-      spawn-process
-      (ok-and-then (lambda (proc) (wait-for-heartbeat! proc path)))
-      Err?
-      ; TODO: log actual error value, show in status
-      (when (warn-spawn-failed! path)
-        )))
+  (let ([result (~> *wakatime-cli*
+                    (command (wakatime-command-args path is-write lineno cursorpos))
+                    with-stderr-piped
+                    spawn-process
+                    (ok-and-then (lambda (proc) (wait-for-heartbeat! proc path))))])
+    (when (Err? result)
+      (log-warn! (string-append "failed spawning wakatime-cli for "
+                                path
+                                ": "
+                                (to-string (unwrap-err result)))))))
 
 (define (spawn-heartbeat-thread! path is-write lineno cursorpos)
   (spawn-native-thread (lambda () (run-wakatime-cli! path is-write lineno cursorpos))))
@@ -314,10 +329,14 @@
 
 (define (install-wakatime-plugin!)
   (unless *wakatime-installed*
-    ; TODO: check wakatime-cli availiablity
     (set! *wakatime-installed* #t)
-    (wakatime-plugin-string!)
-    (register-wakatime-hooks!)
-    (set-status! "wakatime plugin loaded")))
+    (if (which *wakatime-cli*)
+        (begin
+          (wakatime-plugin-string!)
+          (register-wakatime-hooks!)
+          (set-status! "wakatime plugin loaded"))
+        (begin
+          (log-warn! (string-append *wakatime-cli* " not found on PATH"))
+          (set-status! "wakatime: cli not found")))))
 
 (install-wakatime-plugin!)
